@@ -36,6 +36,7 @@ reformat the data.
 NMEA2000 canbus data.
 * Also consider using [ttlappalainen][ttlappalainen]'s NMEA code for more
 complex applications or for guidance.
+* The awesome guys on the South African [Power Forum][powerforum].
 
 ## Purpose
 
@@ -50,3 +51,4 @@ I own a BlueSolar 150/70 MPPT controller, and I want to intgegrate it with
 [canboat]: https://github.com/canboat/canboat
 [ttlappalainen]: https://github.com/ttlappalainen
 [bluelantern]: https://github.com/izak/ib.bluelantern
+[powerforum]: http://powerforum.co.za/
