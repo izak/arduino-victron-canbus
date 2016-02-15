@@ -1,4 +1,4 @@
-# Convert Victron VE.CAN to VE.Direct.
+# Convert Victron VE.CAN to VE.Direct
 
 This is code for the arduino that reads the broadcast messages from the
 BlueSolar MPPT unit and converts them to a subset of the VE.Direct text
@@ -7,7 +7,7 @@ protocol used by the lower end MPPT controllers.
 ## Requirements
 
 1. A canbus shield, such as [this one][shield] by [seeedstudio][seeed]. Try
-[alice1101982][alice] on Ebay. If you build your own, consider using the TI
+[alice1101983][alice] on Ebay. If you build your own, consider using the TI
 ISO1050 canbus transceiver for galvanic isolation.
 2. The [canbus shield library][canbus-lib]. You need to change the CS pin
 to 10 to work with this shield.
