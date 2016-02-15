@@ -15,17 +15,13 @@ MCP_CAN CAN(SPI_CS_PIN);                                    // Set CS pin
 volatile unsigned char flagRecv = 0;
 unsigned char len = 0;
 unsigned char buf[8];
-unsigned char output[16];
-char str[20];
 
 void MCP2515_ISR() {
     flagRecv = 1;
-    digitalWrite(13, HIGH); //Flash LED
 }
 
 void setup() {
     Serial.begin(115200);
-    pinMode(13, OUTPUT);     
     Serial.println("Startup");
 
     while(1) {
@@ -86,7 +82,6 @@ void loop() {
             }
         }
         Serial.print("\n");
-        digitalWrite(13, LOW); // Turn LED off after handling data
     } else {
         delay(10);
     }
