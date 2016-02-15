@@ -76,11 +76,11 @@ void loop() {
                 unsigned long int i = (buf[4]*256+buf[3]);
                 if (buf[0] % 2){
                     Serial.print("\nVPV\t"); Serial.print(v*10);
-                    Serial.print("\nIPV\t"); Serial.print(i*10);
+                    Serial.print("\nIPV\t"); Serial.print(i*100);
                 } else {
                     Serial.print("\nV\t"); Serial.print(v*10);
-                    Serial.print("\nI\t"); Serial.print(i*10);
-                    Serial.print("\nP\t"); Serial.print((i*v)/10000); // Integer division!
+                    Serial.print("\nI\t"); Serial.print(i*100);
+                    Serial.print("\nP\t"); Serial.print((i*v)/1000); // Integer division!
                     Serial.print("\nT\t"); Serial.print(buf[7]);
                 }
             }
