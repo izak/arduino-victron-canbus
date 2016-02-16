@@ -1,15 +1,9 @@
-// d#emo: CAN-BUS Shield, receive data with interrupt mode
-// when in interrupt mode, the data coming can't be too fast, must >20ms, or else you can use check mode
-// loovee, 2014-6-13
-
 #include <SPI.h>
 #include "mcp_can.h"
 
-// the cs pin of the version after v1.1 is default to D9
-// v0.9b and v1.0 is default D10
+/* On some shields, the CS pin should be set to 9 */
 const int SPI_CS_PIN = 10;
-
-MCP_CAN CAN(SPI_CS_PIN);                                    // Set CS pin
+MCP_CAN CAN(SPI_CS_PIN);
 
 
 volatile unsigned char flagRecv = 0;
@@ -43,11 +37,13 @@ void setup() {
         CAN.init_Filt(i, 1, 0x01);
     }
 
-    attachInterrupt(0, MCP2515_ISR, FALLING); // start interrupt
+    attachInterrupt(0, MCP2515_ISR, FALLING); // Install interrupt handler
 }
 
 void loop() {
     //INT32U id = 0;
+    // Uncomment these lines, and set the MCP2515 mode to loopback
+    // if you want to test.
     //unsigned char msg[8] = { 0, 46, 10, 232, 3, 255, 255, 37};
     //unsigned char msg2[8] = { 1, 182, 6, 141, 2, 255, 255, 37};
     //CAN.sendMsgBuf(435295268, 1, 8, msg);
@@ -60,7 +56,7 @@ void loop() {
         // iterate over all pending messages
         // If either the bus is saturated or the MCU is busy,
         // both RX buffers may be in use and reading a single
-        // message does not clear the IRQ conditon.
+        // message will not clear the IRQ conditon.
         while (CAN_MSGAVAIL == CAN.checkReceive()) {
             // read data,  len: data length, buf: data buf
             //CAN.readMsgBufID(&id, &len, buf);
@@ -83,14 +79,12 @@ void loop() {
         }
         Serial.print("\n");
     } else {
-        delay(10);
+        delay(10); // TODO use sleep mode so we wake up on the next interrupt
     }
 }
 
-/*********************************************************************************************************
-  END FILE
-*********************************************************************************************************/
 /*
+NOTES
 
 packets with id: 435295268, pgn = 127508
 First data field (8 bits) is battery instance, followed by 16 bits voltage
@@ -101,10 +95,10 @@ followed by 16 bits ampere. Eg:
 Voltage = 10 * 256 + 46 = 2606 == 26.06V
 
 Filter:
-priority (3 bits), reserved (2 bits), pgn (24 bits), src (8 bits)
-mask = 0x1ffff00, match the 17 bits for PGN
+In this application, the data page bit along with the PDU fields form a 17 bit
+PGN:
 
-XXX1100 1111100100001010000100100
-0000000 11111001000010100XXXXXXXX
+priority (3 bits), extended data (1 bit), pgn (17 bits), src (8 bits)
+mask = 0x1ffff00
 
 */
