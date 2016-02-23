@@ -70,10 +70,11 @@ void loop() {
                     Serial.print("\nVPV\t"); Serial.print(v*10);
                     Serial.print("\nIPV\t"); Serial.print(i*100);
                 } else {
+                    unsigned long int t = (buf[6]*256+buf[5]);
                     Serial.print("\nV\t"); Serial.print(v*10);
                     Serial.print("\nI\t"); Serial.print(i*100);
                     Serial.print("\nP\t"); Serial.print((i*v)/1000); // Integer division!
-                    Serial.print("\nT\t"); Serial.print(buf[7]);
+                    Serial.print("\nT\t"); Serial.print((t+500)/1000); // Integer rounding
                 }
             }
         }
