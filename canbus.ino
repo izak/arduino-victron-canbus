@@ -38,7 +38,7 @@ void setup() {
         CAN.init_Filt(i, 1, 0x01);
     }
 
-    wdt_enable(WDTO_2S); // Watchdog, 2 seconds
+    wdt_enable(WDTO_8S); // Watchdog, 8 seconds
 
     attachInterrupt(0, MCP2515_ISR, FALLING); // Install interrupt handler
 }
@@ -53,7 +53,7 @@ void loop() {
     //CAN.sendMsgBuf(435295268, 1, 8, msg2);
     //delay(1000);
     if(flagRecv) {
-
+        wdt_reset(); // Pat the watchdog
         flagRecv = 0;
 
         // iterate over all pending messages
@@ -70,22 +70,21 @@ void loop() {
                 unsigned long int v = (buf[2]*256+buf[1]);
                 unsigned long int i = (buf[4]*256+buf[3]);
                 if (buf[0] % 2){
-                    Serial.print("\nVPV\t"); Serial.print(v*10);
-                    Serial.print("\nIPV\t"); Serial.print(i*100);
+                    Serial.print("\r\nVPV\t"); Serial.print(v*10);
+                    Serial.print("\r\nIPV\t"); Serial.print(i*100);
                 } else {
                     unsigned long int t = (buf[6]*256+buf[5]);
-                    Serial.print("\nV\t"); Serial.print(v*10);
-                    Serial.print("\nI\t"); Serial.print(i*100);
-                    Serial.print("\nP\t"); Serial.print((i*v)/1000); // Integer division!
-                    Serial.print("\nT\t"); Serial.print((t+500)/1000); // Integer rounding
+                    Serial.print("\r\nV\t"); Serial.print(v*10);
+                    Serial.print("\r\nI\t"); Serial.print(i*100);
+                    Serial.print("\r\nP\t"); Serial.print((i*v)/1000); // Integer division!
+                    Serial.print("\r\nT\t"); Serial.print((t+500)/1000); // Integer rounding
                 }
             }
         }
-        Serial.print("\n");
+        Serial.print("\r\n");
     } else {
         delay(10); // TODO use sleep mode so we wake up on the next interrupt
     }
-    wdt_reset(); // Pat the watchdog
 }
 
 /*
