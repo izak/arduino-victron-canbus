@@ -1,3 +1,4 @@
+#include <avr/wdt.h>
 #include <SPI.h>
 #include "mcp_can.h"
 
@@ -15,7 +16,7 @@ void MCP2515_ISR() {
 }
 
 void setup() {
-    Serial.begin(115200);
+    Serial.begin(19200);
     Serial.println("Startup");
 
     while(1) {
@@ -36,6 +37,8 @@ void setup() {
     for (int i=1; i<6; i++){
         CAN.init_Filt(i, 1, 0x01);
     }
+
+    wdt_enable(WDTO_2S); // Watchdog, 2 seconds
 
     attachInterrupt(0, MCP2515_ISR, FALLING); // Install interrupt handler
 }
@@ -82,6 +85,7 @@ void loop() {
     } else {
         delay(10); // TODO use sleep mode so we wake up on the next interrupt
     }
+    wdt_reset(); // Pat the watchdog
 }
 
 /*
