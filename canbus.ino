@@ -54,7 +54,7 @@ volatile unsigned char flagRecv = 0;
 unsigned char len = 0;
 unsigned char buf[8];
 unsigned char count = 0;
-unsigned char vregs[] = {0xD0, 0xD1, 0xD2, 0xD3, 0xDC, 0x00}; // 00 is terminator
+unsigned char vregs[] = {0xD0, 0xD1, 0xD2, 0xD3, 0xDC};
 DeviceData devicedata;
 
 void MCP2515_ISR() {
@@ -154,7 +154,7 @@ void loop() {
                 unsigned char request_vregs[8] = {0x66, 0x99, 0x01, 0x00, vregs[count++], 0xED, 0xFF, 0xFF};
                 CAN.sendMsgBuf(0x1cef0000 | ((id & 0xFF)<<8) | 0x40, 1, 8,
                     request_vregs);
-                if (!vregs[count]) count = 0;
+                count %= sizeof(vregs);
 
             } else if ((id & VICTRON_MASK) == VICTRON_FILTER) {
                 //unsigned long int vreg = (buf[3]<<8) + buf[2];
