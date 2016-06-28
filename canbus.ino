@@ -152,7 +152,7 @@ void loop() {
                     unsigned long int v = (buf[2]*256+buf[1]);
                     unsigned long int i = (buf[4]*256+buf[3]);
                     if (buf[0] % 2){
-                        // Assume even numbered bank info is pv, other is
+                        // Assume odd numbered bank info is pv, other is
                         // battery side.
                         devicedata.pv_voltage = v;
                         devicedata.pv_current = i;
