@@ -48,6 +48,7 @@ typedef struct {
     unsigned char device_state;
     unsigned long int pv_voltage;
     unsigned long int pv_current;
+    char checksum;
 } DeviceData;
 
 volatile unsigned char flagRecv = 0;
@@ -68,6 +69,32 @@ unsigned long int extract_value(unsigned char *b){
     r = (r << 8) + b[1];
     r = (r << 8) + b[0];
     return r;
+}
+
+uint8_t checksum(const char *msg){
+    uint8_t chr = 0;
+    for (int i=0; msg[i]!='\0'; i++) {
+        chr = (chr + msg[i]);
+    }
+    return chr;
+    //return (char)(256 - chr);
+}
+
+size_t serial_print(const char* s){
+    devicedata.checksum += checksum(s);
+    return Serial.print(s);
+}
+
+size_t serial_print(unsigned long i){
+    unsigned long t = i;
+    // If the long int was to be converted to a string, it would end
+    // up ad chars between 0x30 and 0x39. So simply add them up in the
+    // same manner.
+    while (t>0) {
+        devicedata.checksum += (0x30 + (t % 10));
+        t /= 10;
+    }
+    return Serial.print(i);
 }
 
 void setup() {
@@ -131,20 +158,22 @@ void loop() {
                         devicedata.pv_current = i;
                     } else {
                         unsigned long int t = (buf[6]*256+buf[5]);
-                        Serial.print("\r\nV\t"); Serial.print(v*10);
-                        Serial.print("\r\nVPV\t"); Serial.print(devicedata.pv_voltage*10);
-                        Serial.print("\r\nPPV\t"); Serial.print((devicedata.pv_voltage * devicedata.pv_current)/1000);
-                        Serial.print("\r\nI\t"); Serial.print(i*100);
-                        Serial.print("\r\nIL\t0");
-                        Serial.print("\r\nLOAD\tOFF");
-                        Serial.print("\r\nT\t"); Serial.print((t+500)/1000); // Integer rounding
-                        Serial.print("\r\nH19\t"); Serial.print(devicedata.yield_total);
-                        Serial.print("\r\nH20\t"); Serial.print(devicedata.yield_today);
-                        Serial.print("\r\nH21\t"); Serial.print(devicedata.max_today);
-                        Serial.print("\r\nH22\t"); Serial.print(devicedata.yield_yesterday);
-                        Serial.print("\r\nH23\t"); Serial.print(devicedata.max_yesterday);
-                        Serial.print("\r\nCS\t"); Serial.print(devicedata.device_state);
-                        Serial.print("\r\nChecksum\t");
+                        devicedata.checksum = 0;
+                        serial_print("\r\nV\t"); serial_print(v*10);
+                        serial_print("\r\nVPV\t"); serial_print(devicedata.pv_voltage*10);
+                        serial_print("\r\nPPV\t"); serial_print((devicedata.pv_voltage * devicedata.pv_current)/1000);
+                        serial_print("\r\nI\t"); serial_print(i*100);
+                        serial_print("\r\nIL\t0");
+                        serial_print("\r\nLOAD\tOFF");
+                        serial_print("\r\nT\t"); serial_print((t+500)/1000); // Integer rounding
+                        serial_print("\r\nH19\t"); serial_print(devicedata.yield_total);
+                        serial_print("\r\nH20\t"); serial_print(devicedata.yield_today);
+                        serial_print("\r\nH21\t"); serial_print(devicedata.max_today);
+                        serial_print("\r\nH22\t"); serial_print(devicedata.yield_yesterday);
+                        serial_print("\r\nH23\t"); serial_print(devicedata.max_yesterday);
+                        serial_print("\r\nCS\t"); serial_print(devicedata.device_state);
+                        serial_print("\r\nChecksum\t");
+                        Serial.print((char)(256 - devicedata.checksum));
                     }
                 }
 
