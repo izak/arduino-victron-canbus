@@ -1,37 +1,32 @@
+#include <stdlib.h>
 #include <avr/wdt.h>
 #include <SPI.h>
 #include "mcp_can.h"
 
+#define CAN_QUEUE_SIZE 32
+#define SER_QUEUE_SIZE 32
 #define BATTERY_MASK 0x1ffff00
 #define BATTERY_FILTER (127508 << 8)
 
 #define VICTRON_MASK 0x1fffff00
 #define VICTRON_FILTER 0x1cefff00 //7.0.0.EF.tg=FF.src
 
-/*
-const char* message = 
-"\r\nV\t%ld" // Battery voltage
-"\r\nVPV\t%ld" // Panel Voltage
-"\r\nPPV\t%ld" // Panel power
-"\r\nI\t%ld" // Battery current
-"\r\nIL\t0"
-"\r\nLOAD\tOFF"
-"\r\nT\t%d" // Temperature
-"\r\nH19\t%ld" // Yield Total
-"\r\nH20\t%ld" //Yield Today
-"\r\nH21\t%ld" // Max power today
-"\r\nH22\t%ld" // Yield Yesterday
-"\r\nH23\t%ld" // Max power yesterday
-"\r\nERR\t0"
-"\r\nCS\t%d" // Charger state
-"\r\nFW\t2.03" // Hard coded, should be fetched
-"\r\nPID\t0xA046" // Pretend to be a 150/70
-"\r\nSER#\tHQ1437WAFP8" // Hard coded, look inside case of unit
-"\r\nHSDS\t0"
-"\r\nChecksum\t";*/
-
 /* Response to vedirect serial number will be:
-   0048513134343044345135522C48513134333757414650382C0D0A00000000000054
+
+serial = 'HQ1437WAFP8'
+r = '070A0100'+''.join(["{:02X}".format(ord(x)) for x in serial])
+s = sum([int(x, 16) for x in iter(
+    lambda i=iter(r): "".join(islice(i, 2)), "")]) % 256
+c = "{:02X}".format((0x55-s)%256)
+r = r + c
+
+# Verify
+s = sum([int(x, 16) for x in iter(
+    lambda i=iter(r): "".join(islice(i, 2)), "")]) % 256
+s == 0x55
+
+# Result
+:70A0100485131343337574146503875
 */
 
 
@@ -51,15 +46,36 @@ typedef struct {
     char checksum;
 } DeviceData;
 
-volatile unsigned char flagRecv = 0;
-unsigned char len = 0;
-unsigned char buf[8];
+// Data structure for queueing CAN messages
+typedef struct {
+    INT32U id;
+    unsigned char len;
+    unsigned char buf[8];
+} CanMessage;
+CanMessage can_data[CAN_QUEUE_SIZE];
+unsigned int can_head = 0;
+unsigned int can_tail = 0;
+
 unsigned char count = 0;
 unsigned char vregs[] = {0xD0, 0xD1, 0xD2, 0xD3, 0xDC};
 DeviceData devicedata;
 
+/* Variables for serial input side */
+String inputSerString = "";
+typedef struct {
+    unsigned long int vreg;
+} VeRequest;
+VeRequest ser_data[SER_QUEUE_SIZE];
+unsigned int ser_head = 0;
+unsigned int ser_tail = 0;
+
 void MCP2515_ISR() {
-    flagRecv = 1;
+    CanMessage *rec;
+    while (CAN_MSGAVAIL == CAN.checkReceive()) {
+        rec = &can_data[can_tail++];
+        can_tail %= CAN_QUEUE_SIZE;
+        CAN.readMsgBufID(&rec->id, &rec->len, rec->buf);
+    }
 }
 
 unsigned long int extract_value(unsigned char *b){
@@ -71,17 +87,16 @@ unsigned long int extract_value(unsigned char *b){
     return r;
 }
 
-uint8_t checksum(const char *msg){
+uint8_t vetext_checksum(const char *msg){
     uint8_t chr = 0;
     for (int i=0; msg[i]!='\0'; i++) {
         chr = (chr + msg[i]);
     }
     return chr;
-    //return (char)(256 - chr);
 }
 
 size_t serial_print(const char* s){
-    devicedata.checksum += checksum(s);
+    devicedata.checksum += vetext_checksum(s);
     return Serial.print(s);
 }
 
@@ -95,6 +110,29 @@ size_t serial_print(unsigned long i){
         t /= 10;
     }
     return Serial.print(i);
+}
+
+void serialEvent() {
+    int idx;
+    while (Serial.available()) {
+        // get the new byte:
+        char ch = (char)Serial.read();
+        // add it to the inputSerString:
+        inputSerString += ch;
+        idx = inputSerString.indexOf('\r');
+        if (idx >= 0) {
+            if ((idx > 6) && (inputSerString.startsWith(":7"))) {
+                char id[5];
+                inputSerString.substring(2, 6).toCharArray(id, sizeof(id));
+                unsigned long int vreg = strtol(id+2, NULL, 16);
+                id[2] = '\0';
+                vreg = (vreg << 8) + strtol(id, NULL, 16);
+                ser_data[ser_tail++].vreg = vreg;
+                ser_tail %= SER_QUEUE_SIZE;
+            }
+            inputSerString = "";
+        }
+    }
 }
 
 void setup() {
@@ -131,7 +169,6 @@ void setup() {
 }
 
 void loop() {
-    INT32U id = 0;
     // Uncomment these lines, and set the MCP2515 mode to loopback
     // if you want to test.
     //unsigned char msg[8] = { 0, 46, 10, 232, 3, 255, 255, 37};
@@ -139,79 +176,122 @@ void loop() {
     //CAN.sendMsgBuf(435295268, 1, 8, msg);
     //CAN.sendMsgBuf(435295268, 1, 8, msg2);
     //delay(1000);
-    if(flagRecv) {
-        wdt_reset(); // Pat the watchdog
-        flagRecv = 0;
 
-        // iterate over all pending messages
-        while (CAN_MSGAVAIL == CAN.checkReceive()) {
-            CAN.readMsgBufID(&id, &len, buf);
+    wdt_reset(); // Pat the watchdog
 
-            if ((id & BATTERY_MASK) == BATTERY_FILTER) {
-                if (len >= 8) {
-                    unsigned long int v = (buf[2]*256+buf[1]);
-                    unsigned long int i = (buf[4]*256+buf[3]);
-                    if (buf[0] % 2){
-                        // Assume odd numbered bank info is pv, other is
-                        // battery side.
-                        devicedata.pv_voltage = v;
-                        devicedata.pv_current = i;
-                    } else {
-                        unsigned long int t = (buf[6]*256+buf[5]);
-                        devicedata.checksum = 0;
-                        serial_print("\r\nV\t"); serial_print(v*10);
-                        serial_print("\r\nVPV\t"); serial_print(devicedata.pv_voltage*10);
-                        serial_print("\r\nPPV\t"); serial_print((devicedata.pv_voltage * devicedata.pv_current)/1000);
-                        serial_print("\r\nI\t"); serial_print(i*100);
-                        serial_print("\r\nIL\t0");
-                        serial_print("\r\nLOAD\tOFF");
-                        serial_print("\r\nT\t"); serial_print((t+500)/1000); // Integer rounding
-                        serial_print("\r\nH19\t"); serial_print(devicedata.yield_total);
-                        serial_print("\r\nH20\t"); serial_print(devicedata.yield_today);
-                        serial_print("\r\nH21\t"); serial_print(devicedata.max_today);
-                        serial_print("\r\nH22\t"); serial_print(devicedata.yield_yesterday);
-                        serial_print("\r\nH23\t"); serial_print(devicedata.max_yesterday);
-                        serial_print("\r\nCS\t"); serial_print(devicedata.device_state);
-                        serial_print("\r\nChecksum\t");
-                        Serial.print((char)(256 - devicedata.checksum));
-                    }
-                }
+    CanMessage rec;
 
-                // Send a request for the proprietary registers, ask for one
-                // at a time, otherwise bus gets a little busy on the reception
-                // side. Hard code our address as 0x40.
-                unsigned char request_vregs[8] = {0x66, 0x99, 0x01, 0x00, vregs[count++], 0xED, 0xFF, 0xFF};
-                CAN.sendMsgBuf(0x1cef0000 | ((id & 0xFF)<<8) | 0x40, 1, 8,
-                    request_vregs);
-                count %= sizeof(vregs);
+    // iterate over all pending CAN messages
+    while (can_head != can_tail) {
+        rec = can_data[can_head++];
+        can_head %= CAN_QUEUE_SIZE;
 
-            } else if ((id & VICTRON_MASK) == VICTRON_FILTER) {
-                //unsigned long int vreg = (buf[3]<<8) + buf[2];
-                unsigned long int vreg = buf[3];
-                vreg = (vreg << 8) + buf[2];
-                switch(vreg){
-                    case 0xEDDC: // Total yield
-                        devicedata.yield_total = extract_value(buf+4);
-                        break;
-                    case 0xEDD3: // Yield today
-                        devicedata.yield_today = extract_value(buf+4);
-                        break;
-                    case 0xEDD2: // Max power today
-                        devicedata.max_today = extract_value(buf+4);
-                        break;
-                    case 0xEDD1: // Yield yesterday
-                        devicedata.yield_yesterday = extract_value(buf+4);
-                        break;
-                    case 0xEDD0: // Max power yesterday
-                        devicedata.max_yesterday = extract_value(buf+4);
-                        break;
-                    case 0x0201: // Device state
-                        devicedata.device_state = extract_value(buf+4);
-                        break;
+        if ((rec.id & BATTERY_MASK) == BATTERY_FILTER) {
+            if (rec.len >= 8) {
+                unsigned long int v = (rec.buf[2]*256+rec.buf[1]);
+                unsigned long int i = (rec.buf[4]*256+rec.buf[3]);
+                if (rec.buf[0] % 2){
+                    // Assume odd numbered bank info is pv, other is
+                    // battery side.
+                    devicedata.pv_voltage = v;
+                    devicedata.pv_current = i;
+                } else {
+                    unsigned long int t = (rec.buf[6]*256+rec.buf[5]);
+                    devicedata.checksum = 0;
+                    serial_print("\r\nV\t"); serial_print(v*10);
+                    serial_print("\r\nVPV\t"); serial_print(devicedata.pv_voltage*10);
+                    serial_print("\r\nPPV\t"); serial_print((devicedata.pv_voltage * devicedata.pv_current)/1000);
+                    serial_print("\r\nI\t"); serial_print(i*100);
+                    serial_print("\r\nIL\t0");
+                    serial_print("\r\nLOAD\tOFF");
+                    serial_print("\r\nT\t"); serial_print((t+500)/1000); // Integer rounding
+                    serial_print("\r\nH19\t"); serial_print(devicedata.yield_total);
+                    serial_print("\r\nH20\t"); serial_print(devicedata.yield_today);
+                    serial_print("\r\nH21\t"); serial_print(devicedata.max_today);
+                    serial_print("\r\nH22\t"); serial_print(devicedata.yield_yesterday);
+                    serial_print("\r\nH23\t"); serial_print(devicedata.max_yesterday);
+                    serial_print("\r\nCS\t"); serial_print(devicedata.device_state);
+                    serial_print("\r\nChecksum\t");
+                    Serial.print((char)(256 - devicedata.checksum));
                 }
             }
+
+            // Send a request for the proprietary registers, ask for one
+            // at a time, otherwise bus gets a little busy on the reception
+            // side. Hard code our address as 0x40.
+            unsigned char request_vregs[8] = {0x66, 0x99, 0x01, 0x00, vregs[count++], 0xED, 0xFF, 0xFF};
+            CAN.sendMsgBuf(0x1cef0000 | ((rec.id & 0xFF)<<8) | 0x40, 1, 8,
+                request_vregs);
+            count %= sizeof(vregs);
+
+        } else if ((rec.id & VICTRON_MASK) == VICTRON_FILTER) {
+            unsigned long int vreg = rec.buf[3];
+            vreg = (vreg << 8) + rec.buf[2];
+            switch(vreg){
+                case 0xEDDC: // Total yield
+                    devicedata.yield_total = extract_value(rec.buf+4);
+                    break;
+                case 0xEDD3: // Yield today
+                    devicedata.yield_today = extract_value(rec.buf+4);
+                    break;
+                case 0xEDD2: // Max power today
+                    devicedata.max_today = extract_value(rec.buf+4);
+                    break;
+                case 0xEDD1: // Yield yesterday
+                    devicedata.yield_yesterday = extract_value(rec.buf+4);
+                    break;
+                case 0xEDD0: // Max power yesterday
+                    devicedata.max_yesterday = extract_value(rec.buf+4);
+                    break;
+                case 0x0201: // Device state
+                    devicedata.device_state = extract_value(rec.buf+4);
+                    break;
+            }
         }
-    } else {
+    }
+
+    VeRequest req;
+
+    // iterate over all pending serial messages
+    while (ser_head != ser_tail) {
+        req = ser_data[ser_head++];
+        ser_head %= SER_QUEUE_SIZE;
+
+        switch(req.vreg){
+            case 0x010A:
+                // HQ1437WAFP8
+                Serial.print(":70A0100485131343337574146503875\n");
+                break;
+            //case 0x0201:
+            //    break;
+            //case 0xEDDC: // User yield
+            //    break;
+            //case 0xEDD3: // Yield today
+            //    break;
+            //case 0xEDD2: // Max power today
+            //    break;
+            //case 0xEDD1:// Yield yesterday
+            //    break;
+            //case 0xEDD0: // Max power yesterday
+            //    break;
+            //case 0xED8F: // Actual current
+            //    break;
+            //case 0xEDAD: // Load output current
+            //    break;
+            //case 0xEDA8: // Load output control mode
+            //    break;
+            //case 0xEDBC: // Input power
+            //    break;
+            //case 0xEDEC: // Battery temperature
+            //    break;
+            //case 0xED8D: // Channel 1 voltage
+            //    break;
+            //case 0xEDBB: // Input voltage
+            //    break;
+        }
+    }
+
+    if ((ser_head == ser_tail) && (can_head == can_tail)) {
         delay(10); // TODO use sleep mode so we wake up on the next interrupt
     }
 }
