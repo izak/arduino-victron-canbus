@@ -88,7 +88,7 @@ size_t serial_print(const char* s){
 size_t serial_print(unsigned long i){
     unsigned long t = i;
     // If the long int was to be converted to a string, it would end
-    // up ad chars between 0x30 and 0x39. So simply add them up in the
+    // up as chars between 0x30 and 0x39. So simply add them up in the
     // same manner.
     while (t>0) {
         devicedata.checksum += (0x30 + (t % 10));
