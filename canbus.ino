@@ -55,8 +55,7 @@ DeviceData devicedata;
 // Data structures for quering and caching vregs
 unsigned char count = 0;
 unsigned int vregs[] = {0x0201, 0xEDDC, 0xEDD3, 0xEDD2, 0xEDD1, 0xEDD0,
-    0xED8F, 0xEDAD, 0xEDA8, 0xEDBC, 0xEDEC, 0xED8D, 0xEDBB, 0xEDDB,
-    0x0200, 0x0202, 0x2003};
+    0xEDBC, 0xEDEC, 0xED8D, 0xEDBB, 0xEDDB, 0xEDF0};
 typedef struct {
     unsigned int vreg;
     unsigned long value;
@@ -130,7 +129,7 @@ size_t serial_print(unsigned long i) {
     return Serial.print(i);
 }
 
-void vehex_reply(unsigned int vreg, unsigned long v) {
+void vehex_reply(unsigned int vreg, unsigned char flags, unsigned long v) {
     unsigned int lo = vreg & 0xFF;
     unsigned int hi = (vreg & 0xFF00)>>8;
     unsigned char *p = (unsigned char*)&v;
@@ -138,11 +137,11 @@ void vehex_reply(unsigned int vreg, unsigned long v) {
     char out[16];
 
     if (v > 0xFFFF) {
-        snprintf(out, sizeof(out), ":7%02X%02X00%04lX%02X\n",
-            lo, hi, SWAP_UINT32(v), ck);
+        snprintf(out, sizeof(out), ":7%02X%02X%02X%04lX%02X\n",
+            lo, hi, flags, SWAP_UINT32(v), ck);
     } else {
-        snprintf(out, sizeof(out), ":7%02X%02X00%02lX%02X\n",
-            lo, hi, SWAP_UINT16(v), ck);
+        snprintf(out, sizeof(out), ":7%02X%02X%02X%02lX%02X\n",
+            lo, hi, flags, SWAP_UINT16(v), ck);
     }
     Serial.print(out);
 }
@@ -261,6 +260,8 @@ void loop() {
                     serial_print("\r\nH22\t"); serial_print(devicedata.yield_yesterday);
                     serial_print("\r\nH23\t"); serial_print(devicedata.max_yesterday);
                     serial_print("\r\nCS\t"); serial_print(devicedata.device_state);
+                    serial_print("\r\nFW\t2.03");
+                    serial_print("\r\nPID\t0xA046");
                     serial_print("\r\nSER#\tHQ1437WAFP8");
                     serial_print("\r\nChecksum\t");
                     Serial.print((char)(256 - devicedata.checksum));
@@ -317,7 +318,11 @@ void loop() {
                 break;
             default:
                 VRegCache *ptr = get_vreg_cache(req->vreg);
-                if (ptr) vehex_reply(req->vreg, ptr->value);
+                if (ptr){
+                    vehex_reply(req->vreg, '\x00', ptr->value);
+                } else {
+                    vehex_reply(req->vreg, '\x01', 0);
+                }
         }
     }
 
@@ -382,7 +387,7 @@ Proprietary messages we might care about:
 102 153 219 237 188 7 0 0 (0xEDDB == charger temp, 7*256+188 = 19.8 C)
 
 We have to ask for these
-102 153 2 1 0 3 2 0  (0x0102, firmware version, v3.02.00)
+102 153 2 1 0 3 2 0  (0x0102, firmware version, v2.03.00)
 102 153 211 237 129 0 0 0 (0xEDD3, yield today, 1.29kwh)
 102 153 220 237 24 109 1 0 (0xEDDC, user system yield, 934.64kwh)
 102 153 209 237 34 1 0 0 (0xEDD1, yield yesterday, 2.9kwh)
