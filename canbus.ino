@@ -3,8 +3,12 @@
 #include <SPI.h>
 #include "mcp_can.h"
 
-#define CAN_QUEUE_SIZE 32
-#define SER_QUEUE_SIZE 32
+#define SWAP_UINT16(x) (((x) >> 8) | ((x) << 8))
+#define SWAP_UINT32(x) (((x) >> 24) | (((x) & 0x00FF0000) >> 8) | (((x) & 0x0000FF00) << 8) | ((x) << 24))
+
+#define CAN_ADDRESS 0x40 // Hard code our address
+#define CAN_QUEUE_SIZE 8
+#define SER_QUEUE_SIZE 16
 #define BATTERY_MASK 0x1ffff00
 #define BATTERY_FILTER (127508 << 8)
 
@@ -34,6 +38,7 @@ s == 0x55
 const int SPI_CS_PIN = 10;
 MCP_CAN CAN(SPI_CS_PIN);
 
+// Data structure for storing info that goes out as Text
 typedef struct {
     unsigned long int yield_total;
     unsigned long int yield_today;
@@ -43,8 +48,20 @@ typedef struct {
     unsigned char device_state;
     unsigned long int pv_voltage;
     unsigned long int pv_current;
-    char checksum;
+    uint8_t checksum;
 } DeviceData;
+DeviceData devicedata;
+
+// Data structures for quering and caching vregs
+unsigned char count = 0;
+unsigned int vregs[] = {0x0201, 0xEDDC, 0xEDD3, 0xEDD2, 0xEDD1, 0xEDD0,
+    0xED8F, 0xEDAD, 0xEDA8, 0xEDBC, 0xEDEC, 0xED8D, 0xEDBB, 0xEDDB,
+    0x0200, 0x0202, 0x2003};
+typedef struct {
+    unsigned int vreg;
+    unsigned long value;
+} VRegCache;
+VRegCache vreg_cache[sizeof(vregs)/2];
 
 // Data structure for queueing CAN messages
 typedef struct {
@@ -56,18 +73,79 @@ CanMessage can_data[CAN_QUEUE_SIZE];
 unsigned int can_head = 0;
 unsigned int can_tail = 0;
 
-unsigned char count = 0;
-unsigned char vregs[] = {0xD0, 0xD1, 0xD2, 0xD3, 0xDC};
-DeviceData devicedata;
-
-/* Variables for serial input side */
+// Variables for serial input side
 String inputSerString = "";
 typedef struct {
-    unsigned long int vreg;
+    unsigned int vreg;
 } VeRequest;
 VeRequest ser_data[SER_QUEUE_SIZE];
 unsigned int ser_head = 0;
 unsigned int ser_tail = 0;
+
+VRegCache* get_vreg_cache(unsigned int vreg) {
+    for (unsigned int i=0; i < sizeof(vregs)/2; i++) {
+        if (vreg_cache[i].vreg == vreg) {
+            return &vreg_cache[i];
+        }
+    }
+    return NULL;
+}
+
+void set_vreg_cache(unsigned int vreg, unsigned long value) {
+    VRegCache *ptr = get_vreg_cache(vreg);
+    if (ptr) ptr->value = value;
+}
+
+unsigned long extract_value(unsigned char *b) {
+    unsigned long int r = 0;
+    r = b[3];
+    r = (r << 8) + b[2];
+    r = (r << 8) + b[1];
+    r = (r << 8) + b[0];
+    return r;
+}
+
+uint8_t vetext_checksum(const char *msg) {
+    uint8_t chr = 0;
+    for (int i=0; msg[i]!='\0'; i++) {
+        chr = (chr + msg[i]);
+    }
+    return chr;
+}
+
+size_t serial_print(const char* s) {
+    devicedata.checksum += vetext_checksum(s);
+    return Serial.print(s);
+}
+
+size_t serial_print(unsigned long i) {
+    unsigned long t = i;
+    // If the long int was to be converted to a string, it would end
+    // up as chars between 0x30 and 0x39. So simply add them up in the
+    // same manner.
+    do {
+        devicedata.checksum += (0x30 + (t % 10));
+        t /= 10;
+    } while (t>0);
+    return Serial.print(i);
+}
+
+void vehex_reply(unsigned int vreg, unsigned long v) {
+    unsigned int lo = vreg & 0xFF;
+    unsigned int hi = (vreg & 0xFF00)>>8;
+    unsigned char *p = (unsigned char*)&v;
+    uint8_t ck = (0x55-(7+lo+hi+p[0]+p[1]+p[2]+p[3])) % 0x100;
+    char out[16];
+
+    if (v > 0xFFFF) {
+        snprintf(out, sizeof(out), ":7%02X%02X00%04lX%02X\n",
+            lo, hi, SWAP_UINT32(v), ck);
+    } else {
+        snprintf(out, sizeof(out), ":7%02X%02X00%02lX%02X\n",
+            lo, hi, SWAP_UINT16(v), ck);
+    }
+    Serial.print(out);
+}
 
 void MCP2515_ISR() {
     CanMessage *rec;
@@ -78,40 +156,6 @@ void MCP2515_ISR() {
     }
 }
 
-unsigned long int extract_value(unsigned char *b){
-    unsigned long int r = 0;
-    r = b[3];
-    r = (r << 8) + b[2];
-    r = (r << 8) + b[1];
-    r = (r << 8) + b[0];
-    return r;
-}
-
-uint8_t vetext_checksum(const char *msg){
-    uint8_t chr = 0;
-    for (int i=0; msg[i]!='\0'; i++) {
-        chr = (chr + msg[i]);
-    }
-    return chr;
-}
-
-size_t serial_print(const char* s){
-    devicedata.checksum += vetext_checksum(s);
-    return Serial.print(s);
-}
-
-size_t serial_print(unsigned long i){
-    unsigned long t = i;
-    // If the long int was to be converted to a string, it would end
-    // up as chars between 0x30 and 0x39. So simply add them up in the
-    // same manner.
-    while (t>0) {
-        devicedata.checksum += (0x30 + (t % 10));
-        t /= 10;
-    }
-    return Serial.print(i);
-}
-
 void serialEvent() {
     int idx;
     while (Serial.available()) {
@@ -119,15 +163,15 @@ void serialEvent() {
         char ch = (char)Serial.read();
         // add it to the inputSerString:
         inputSerString += ch;
-        idx = inputSerString.indexOf('\r');
+        idx = inputSerString.indexOf('\n');
         if (idx >= 0) {
             if ((idx > 6) && (inputSerString.startsWith(":7"))) {
                 char id[5];
                 inputSerString.substring(2, 6).toCharArray(id, sizeof(id));
-                unsigned long int vreg = strtol(id+2, NULL, 16);
+                unsigned long vreg = strtol(id+2, NULL, 16);
                 id[2] = '\0';
                 vreg = (vreg << 8) + strtol(id, NULL, 16);
-                ser_data[ser_tail++].vreg = vreg;
+                ser_data[ser_tail++].vreg = (vreg & 0xFFFF);
                 ser_tail %= SER_QUEUE_SIZE;
             }
             inputSerString = "";
@@ -139,11 +183,17 @@ void setup() {
     // Initialise pointer with device data
     memset((char*)&devicedata, 0, sizeof(devicedata));
 
+    // Initialise vreg_cache
+    for (unsigned int i=0; i < sizeof(vregs)/2; i++) {
+        vreg_cache[i].vreg = vregs[i];
+        vreg_cache[i].value = 0;
+    }
+
     Serial.begin(19200);
     Serial.println("Startup");
 
     while(1) {
-        if (CAN_OK == CAN.begin(CAN_250KBPS)){
+        if (CAN_OK == CAN.begin(CAN_250KBPS)) {
             Serial.println("CAN BUS Shield init ok!");
             break;
         }
@@ -190,7 +240,7 @@ void loop() {
             if (rec.len >= 8) {
                 unsigned long int v = (rec.buf[2]*256+rec.buf[1]);
                 unsigned long int i = (rec.buf[4]*256+rec.buf[3]);
-                if (rec.buf[0] % 2){
+                if (rec.buf[0] % 2) {
                     // Assume odd numbered bank info is pv, other is
                     // battery side.
                     devicedata.pv_voltage = v;
@@ -211,6 +261,7 @@ void loop() {
                     serial_print("\r\nH22\t"); serial_print(devicedata.yield_yesterday);
                     serial_print("\r\nH23\t"); serial_print(devicedata.max_yesterday);
                     serial_print("\r\nCS\t"); serial_print(devicedata.device_state);
+                    serial_print("\r\nSER#\tHQ1437WAFP8");
                     serial_print("\r\nChecksum\t");
                     Serial.print((char)(256 - devicedata.checksum));
                 }
@@ -218,16 +269,18 @@ void loop() {
 
             // Send a request for the proprietary registers, ask for one
             // at a time, otherwise bus gets a little busy on the reception
-            // side. Hard code our address as 0x40.
-            unsigned char request_vregs[8] = {0x66, 0x99, 0x01, 0x00, vregs[count++], 0xED, 0xFF, 0xFF};
-            CAN.sendMsgBuf(0x1cef0000 | ((rec.id & 0xFF)<<8) | 0x40, 1, 8,
-                request_vregs);
-            count %= sizeof(vregs);
+            // side.
+            unsigned char request_vreg[8] = {0x66, 0x99, 0x01, 0x00,
+                (unsigned char)(vregs[count] & 0xFF),
+                (unsigned char)((vregs[count] & 0xFF00) >> 8), 0xFF, 0xFF};
+            CAN.sendMsgBuf(0x1cef0000 | ((rec.id & 0xFF)<<8) | CAN_ADDRESS, 1, 8,
+                request_vreg);
+            count = (count + 1) % sizeof(vregs)/2;
 
         } else if ((rec.id & VICTRON_MASK) == VICTRON_FILTER) {
-            unsigned long int vreg = rec.buf[3];
+            unsigned int vreg = rec.buf[3];
             vreg = (vreg << 8) + rec.buf[2];
-            switch(vreg){
+            switch(vreg) {
                 case 0xEDDC: // Total yield
                     devicedata.yield_total = extract_value(rec.buf+4);
                     break;
@@ -247,47 +300,24 @@ void loop() {
                     devicedata.device_state = extract_value(rec.buf+4);
                     break;
             }
+            set_vreg_cache(vreg, extract_value(rec.buf+4));
         }
     }
 
-    VeRequest req;
-
     // iterate over all pending serial messages
+    VeRequest *req;
     while (ser_head != ser_tail) {
-        req = ser_data[ser_head++];
+        req = &ser_data[ser_head++];
         ser_head %= SER_QUEUE_SIZE;
 
-        switch(req.vreg){
+        switch (req->vreg) {
             case 0x010A:
                 // HQ1437WAFP8
                 Serial.print(":70A0100485131343337574146503875\n");
                 break;
-            //case 0x0201:
-            //    break;
-            //case 0xEDDC: // User yield
-            //    break;
-            //case 0xEDD3: // Yield today
-            //    break;
-            //case 0xEDD2: // Max power today
-            //    break;
-            //case 0xEDD1:// Yield yesterday
-            //    break;
-            //case 0xEDD0: // Max power yesterday
-            //    break;
-            //case 0xED8F: // Actual current
-            //    break;
-            //case 0xEDAD: // Load output current
-            //    break;
-            //case 0xEDA8: // Load output control mode
-            //    break;
-            //case 0xEDBC: // Input power
-            //    break;
-            //case 0xEDEC: // Battery temperature
-            //    break;
-            //case 0xED8D: // Channel 1 voltage
-            //    break;
-            //case 0xEDBB: // Input voltage
-            //    break;
+            default:
+                VRegCache *ptr = get_vreg_cache(req->vreg);
+                if (ptr) vehex_reply(req->vreg, ptr->value);
         }
     }
 
@@ -348,7 +378,7 @@ Proprietary messages we might care about:
 102 153 1 2 0 0 0 0 (0x0201 == Device State, put on CS field)
 102 153 188 237 0 0 0 0 (0xEDBC == Input Power)
 102 153 0 2 4 0 0 0  (0x0200 == Device mode, 4 == off)
-102 153 187 237 159 6 0 0 (0xEDBB == Input Voltage, 6*256+159 = 16.95V)
+102 153 187 237 159 6 0 0 (0xEDBB, 0xEDBB == Input Voltage, 6*256+159 = 16.95V)
 102 153 219 237 188 7 0 0 (0xEDDB == charger temp, 7*256+188 = 19.8 C)
 
 We have to ask for these
